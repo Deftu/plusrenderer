@@ -34,21 +34,15 @@ To build the native library, run `scripts/build-native.sh <resources-dir> [rust-
 
 ## Using it
 
-Releases are cut from tags. Pushing one runs `.github/workflows/release.yml`:
-
-```bash
-git tag v0.2.0 && git push --tags
-```
-
-The workflow needs the repository variable `REPOSILITE_URL` and the secrets `REPOSILITE_USERNAME`
-and `REPOSILITE_TOKEN`.
+Publishing a GitHub release runs `.github/workflows/release.yml`, which attaches the jar, npm tarball
+and wasm to it and publishes the jar to Reposilite. The tag is the version.
 
 ### Java 8+
 
 The jar in `java/` uses JNI and ships the native library for every platform.
 
 ```kotlin
-repositories { maven("<REPOSILITE_URL>") }
+repositories { maven("https://repo.polyfrost.org/releases") }
 dependencies { implementation("org.polyfrost:plusrenderer:0.2.0") }
 ```
 

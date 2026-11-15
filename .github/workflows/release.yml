@@ -1,13 +1,8 @@
-# Push a `v*` tag: the jar (every platform's native inside) goes to Reposilite, and the jar,
-# the npm tarball and the wasm go on the GitHub release. Rust users depend on the tag directly.
-#
-# Repository settings: variable REPOSILITE_URL (e.g. https://repo.example.org/releases),
-# secrets REPOSILITE_USERNAME and REPOSILITE_TOKEN (a Reposilite token with write access).
 name: Release
 
 on:
-    push:
-        tags: ["v*"]
+    release:
+        types: [published]
 
 jobs:
     natives:
@@ -30,7 +25,7 @@ jobs:
                   targets: ${{ matrix.target }}
             - run: sh scripts/build-native.sh out ${{ matrix.target }}
               shell: bash
-            - uses: actions/upload-artifact@v4
+            - uses: actions/upload-artifact@v7
               with:
                   name: natives-${{ matrix.target }}
                   path: out/
@@ -47,7 +42,7 @@ jobs:
               with:
                   toolchain: "1.97"
                   targets: wasm32-unknown-unknown
-            - uses: actions/download-artifact@v4
+            - uses: actions/download-artifact@v8
               with:
                   pattern: natives-*
                   path: target/java-resources
@@ -59,20 +54,18 @@ jobs:
                   java-version: |
                       8
                       21
-            - uses: gradle/actions/setup-gradle@v4
-            # Named task: fails if REPOSILITE_URL is unset instead of publishing nowhere.
-            - run: ./gradlew test publishMavenPublicationToReposiliteRepository -Pversion="${GITHUB_REF_NAME#v}"
+            - uses: gradle/actions/setup-gradle@v6
+            - run: ./gradlew build -Pversion="${GITHUB_REF_NAME#v}"
               working-directory: java
-              env:
-                  ORG_GRADLE_PROJECT_reposiliteUrl: ${{ vars.REPOSILITE_URL }}
-                  ORG_GRADLE_PROJECT_reposiliteUsername: ${{ secrets.REPOSILITE_USERNAME }}
-                  ORG_GRADLE_PROJECT_reposilitePassword: ${{ secrets.REPOSILITE_TOKEN }}
             - run: scripts/build-wasm.sh
             - run: npm pkg set version="${GITHUB_REF_NAME#v}" && npm pack
               working-directory: packages/renderer
-            - uses: softprops/action-gh-release@v2
-              with:
-                  files: |
-                      java/build/libs/*.jar
-                      packages/renderer/*.tgz
-                      packages/renderer/plusrenderer.wasm
+            - run: gh release upload "$GITHUB_REF_NAME" java/build/libs/*.jar packages/renderer/*.tgz packages/renderer/plusrenderer.wasm --clobber
+              env:
+                  GH_TOKEN: ${{ github.token }}
+            - run: ./gradlew publishMavenPublicationToReposiliteRepository -Pversion="${GITHUB_REF_NAME#v}"
+              working-directory: java
+              env:
+                  ORG_GRADLE_PROJECT_reposiliteUrl: https://repo.polyfrost.org/releases
+                  ORG_GRADLE_PROJECT_reposiliteUsername: ${{ secrets.REPOSILITE_USERNAME }}
+                  ORG_GRADLE_PROJECT_reposilitePassword: ${{ secrets.REPOSILITE_TOKEN }}
