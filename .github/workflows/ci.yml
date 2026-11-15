@@ -15,6 +15,10 @@ jobs:
               with:
                   toolchain: "1.97"
                   targets: wasm32-unknown-unknown
+            - uses: dtolnay/rust-toolchain@master
+              with:
+                  toolchain: nightly-2026-07-21
+                  components: rust-src
             - uses: Swatinem/rust-cache@v2
             - run: cargo +1.97 test -p plusrenderer -p plusrenderer-ffi
             - run: scripts/build-wasm.sh

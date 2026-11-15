@@ -583,6 +583,11 @@ mod tests {
     }
 
     #[test]
+    fn guarded_turns_a_panic_into_failed() {
+        assert_eq!(guarded(-1, || panic!("core bug")), -1);
+    }
+
+    #[test]
     fn bundle_parts_cross_as_newline_joined_names() {
         let names = "wings.png\nwings.geo.json";
         unsafe {

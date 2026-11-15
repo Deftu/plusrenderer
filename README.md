@@ -34,8 +34,8 @@ To build the native library, run `scripts/build-native.sh <resources-dir> [rust-
 
 ## Using it
 
-Publishing a GitHub release runs `.github/workflows/release.yml`, which attaches the jar, npm tarball
-and wasm to it and publishes the jar to Reposilite. The tag is the version.
+Publishing a GitHub release runs `.github/workflows/release.yml`, which attaches the jar, npm tarball,
+wasm and each platform's native library to it and publishes the jar to Reposilite. The tag is the version.
 
 ### Java 8+
 
@@ -67,6 +67,9 @@ plusrenderer = { git = "https://github.com/<owner>/<repo>", tag = "v0.2.0" }
 # Optional, for drawing with Skia or Freya.
 plusrenderer-skia = { git = "https://github.com/<owner>/<repo>", tag = "v0.2.0" }
 ```
+
+Hosts that would rather link the prebuilt C ABI library can take
+`libplusrenderer_ffi-<os>-<arch>.{so,dylib}` or `plusrenderer_ffi-windows-<arch>.dll` from the release.
 
 If the repository is private, set `net.git-fetch-with-cli = true` in the launcher's
 `.cargo/config.toml` so Cargo uses your git credentials.

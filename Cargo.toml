@@ -3,8 +3,8 @@ resolver = "2"
 members = ["crates/core", "crates/ffi", "crates/skia"]
 
 [profile.release]
-opt-level = "z"
-lto = true
+opt-level = "s"
+lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
