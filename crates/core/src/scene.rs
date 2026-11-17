@@ -29,6 +29,8 @@ struct Slot {
     life_time: Option<u16>,
     /// Scene time the animation started at. `None` holds the rest pose.
     started: Option<f32>,
+    /// Evaluated at the first `pose` of a play, so random delays don't re-roll every frame.
+    delays: Option<[f32; 2]>,
     pose: Pose,
     transforms: Vec<Affine>,
     frames: u32,
@@ -54,6 +56,7 @@ impl Slot {
             anim_time: None,
             life_time: None,
             started: None,
+            delays: None,
             pose: Pose(Vec::new()),
             transforms: Vec::new(),
             frames: 1,
@@ -88,8 +91,12 @@ impl Slot {
             }
         }
 
-        let time = (self.animation.as_ref().zip(self.started))
-            .and_then(|(a, started)| a.local_time(seconds - started, &mut self.runtime));
+        let time = (self.animation.as_ref().zip(self.started)).and_then(|(a, started)| {
+            let delays = *self
+                .delays
+                .get_or_insert_with(|| a.delays(&mut self.runtime));
+            a.local_time(seconds - started, delays)
+        });
         let (Some(animation), Some(time)) = (&self.animation, time) else {
             self.pose.reset();
             // Played but still in its start delay.
@@ -185,6 +192,7 @@ impl Scene {
         s.anim_time = s.interner.query_slot("anim_time");
         s.life_time = s.interner.query_slot("life_time");
         s.started = None;
+        s.delays = None;
 
         if let Some(model) = &s.model {
             s.bind = s
@@ -198,11 +206,15 @@ impl Scene {
     }
 
     pub fn play(&mut self, slot: usize, at: f32) {
-        self.slot(slot).started = Some(at);
+        let s = self.slot(slot);
+        s.started = Some(at);
+        s.delays = None;
     }
 
     pub fn stop(&mut self, slot: usize) {
-        self.slot(slot).started = None;
+        let s = self.slot(slot);
+        s.started = None;
+        s.delays = None;
     }
 
     /// About the bone it hangs from, as the in-game client scales a shoulder pet.
@@ -511,6 +523,22 @@ mod tests {
         scene.set_query("is_moving", 1.0);
         scene.pose(0.0);
         assert_eq!(scene.bone_pose(1, "brim").unwrap().rotation[0], 15.0);
+    }
+
+    #[test]
+    fn a_random_start_delay_rolls_once_per_play() {
+        let json = r#"{"animations":{"a":{"loop":true,"animation_length":2,"start_delay":"math.random(0, 1)",
+            "bones":{"head":{"rotation":{"0.0":[0,0,0],"2.0":[60,0,0]}}}}}}"#;
+        let mut scene = scene_with_hat();
+        scene.load_animation(0, json).unwrap();
+        scene.play(0, 0.0);
+
+        let mut angles = Vec::new();
+        for _ in 0..8 {
+            scene.pose(1.5);
+            angles.push(scene.bone_pose(0, "head").unwrap().rotation[0]);
+        }
+        assert!(angles.windows(2).all(|w| w[0] == w[1]), "{angles:?}");
     }
 
     #[test]

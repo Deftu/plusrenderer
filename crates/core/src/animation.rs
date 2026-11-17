@@ -100,10 +100,15 @@ pub struct Animation {
 }
 
 impl Animation {
-    /// Time within the animation, or `None` before it starts.
-    // ponytail: delays re-evaluate per call, so a random delay re-rolls. Cache them if that bites.
-    pub fn local_time(&self, elapsed: f32, rt: &mut Runtime) -> Option<f32> {
-        let t = elapsed - self.start_delay.eval(rt);
+    /// Start and loop delay. Evaluate once per play, so a random delay holds for the whole run.
+    pub fn delays(&self, rt: &mut Runtime) -> [f32; 2] {
+        [self.start_delay.eval(rt), self.loop_delay.eval(rt)]
+    }
+
+    /// Time within the animation, or `None` before it starts. `delays` is from `delays`.
+    pub fn local_time(&self, elapsed: f32, delays: [f32; 2]) -> Option<f32> {
+        let [start_delay, loop_delay] = delays;
+        let t = elapsed - start_delay;
         if t < 0.0 {
             return None;
         }
@@ -111,7 +116,7 @@ impl Animation {
         match self.loop_mode {
             Loop::Once => Some(t.min(self.length)),
             Loop::Repeat => {
-                let period = self.length + self.loop_delay.eval(rt).max(0.0);
+                let period = self.length + loop_delay.max(0.0);
                 if period <= 0.0 {
                     return Some(0.0);
                 }
@@ -520,18 +525,21 @@ mod tests {
         let (looping, interner) =
             load(r#"{"animations":{"a":{"loop":true,"animation_length":2.0,"bones":{}}}}"#);
         let mut rt = Runtime::new(&interner);
-        assert_eq!(looping[0].local_time(5.0, &mut rt), Some(1.0));
+        let delays = looping[0].delays(&mut rt);
+        assert_eq!(looping[0].local_time(5.0, delays), Some(1.0));
 
         let (once, interner) = load(r#"{"animations":{"a":{"animation_length":2.0,"bones":{}}}}"#);
         let mut rt = Runtime::new(&interner);
-        assert_eq!(once[0].local_time(1.0, &mut rt), Some(1.0));
-        assert_eq!(once[0].local_time(3.0, &mut rt), Some(2.0));
+        let delays = once[0].delays(&mut rt);
+        assert_eq!(once[0].local_time(1.0, delays), Some(1.0));
+        assert_eq!(once[0].local_time(3.0, delays), Some(2.0));
 
         let (held, interner) = load(
             r#"{"animations":{"a":{"loop":"hold_on_last_frame","animation_length":2.0,"bones":{}}}}"#,
         );
         let mut rt = Runtime::new(&interner);
-        assert_eq!(held[0].local_time(9.0, &mut rt), Some(2.0));
+        let delays = held[0].delays(&mut rt);
+        assert_eq!(held[0].local_time(9.0, delays), Some(2.0));
     }
 
     #[test]

@@ -287,6 +287,15 @@ pub unsafe extern "C" fn renderer_pose(r: *mut Renderer, seconds: f32) -> i32 {
     })
 }
 
+/// 1 if a later pose could differ from the last one. While 0, hosts can skip unchanged frames.
+/// # Safety
+/// `r` must come from `renderer_new`.
+#[no_mangle]
+pub unsafe extern "C" fn renderer_is_animating(r: *const Renderer) -> u32 {
+    let r = &*r;
+    r.scene.is_animating() as u32
+}
+
 /// Sets a posed vanilla part: core name, rest and current pivot (pixels), rotation (radians), scale.
 /// # Safety
 /// `name_ptr`/`name_len` must describe UTF-8 bytes valid for this call.

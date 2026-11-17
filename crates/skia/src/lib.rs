@@ -10,17 +10,8 @@ use skia_safe::{
 
 /// `textures[slot]` is that slot's image. Runs without one are skipped.
 pub fn draw(canvas: &Canvas, buffers: &Buffers, textures: &[Option<Image>]) {
-    let points = |v: &[f32]| {
-        v.as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&[x, y]| Point::new(x, y))
-            .collect::<Vec<_>>()
-    };
-    let positions = points(&buffers.positions);
-    let uvs = points(&buffers.uvs);
-    let colors: Vec<Color> = buffers.colors.iter().map(|&c| Color::new(c)).collect();
     let sampling = SamplingOptions::new(FilterMode::Nearest, MipmapMode::None);
+    let mut indices = Vec::new();
 
     for run in &buffers.runs {
         let Some(Some(image)) = textures.get(run.texture as usize) else {
@@ -34,14 +25,33 @@ pub fn draw(canvas: &Canvas, buffers: &Buffers, textures: &[Option<Image>]) {
             continue;
         };
 
-        let indices = &buffers.indices[run.start as usize..(run.start + run.count) as usize];
-        // ponytail: copies every vertex per run. Slice to the run's vertex range if runs get numerous.
+        // The core emits each run's vertices contiguously, so copy only that range and rebase.
+        let run_indices = &buffers.indices[run.start as usize..(run.start + run.count) as usize];
+        let (Some(&lo), Some(&hi)) = (run_indices.iter().min(), run_indices.iter().max()) else {
+            continue;
+        };
+        let (lo, hi) = (lo as usize, hi as usize + 1);
+        indices.clear();
+        indices.extend(run_indices.iter().map(|&i| i - lo as u16));
+
+        let points = |v: &[f32]| -> Vec<Point> {
+            v[lo * 2..hi * 2]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&[x, y]| Point::new(x, y))
+                .collect()
+        };
+        let colors: Vec<Color> = buffers.colors[lo..hi]
+            .iter()
+            .map(|&c| Color::new(c))
+            .collect();
         let vertices = Vertices::new_copy(
             VertexMode::Triangles,
-            &positions,
-            &uvs,
+            &points(&buffers.positions),
+            &points(&buffers.uvs),
             &colors,
-            Some(indices),
+            Some(&indices),
         );
 
         let mut paint = Paint::default();
