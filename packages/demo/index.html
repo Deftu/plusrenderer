@@ -29,7 +29,7 @@
     .cosmetics { display: grid; gap: 4px; }
     .cosmetic { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; }
     .cosmetic .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .cosmetic select { font: inherit; font-size: 11px; background: #2a2c31; color: inherit; border: 1px solid #3a3d44; border-radius: 4px; }
+    select { font: inherit; font-size: 11px; background: #2a2c31; color: inherit; border: 1px solid #3a3d44; border-radius: 4px; }
     .cosmetic button { padding: 0 6px; }
     .hint { color: #8b8d96; font-size: 11px; }
     #stats { color: #8b8d96; font-variant-numeric: tabular-nums; }
@@ -61,6 +61,8 @@
     <h2>Cape</h2>
     <div class="row">
         <label><input id="cape" type="checkbox"> show</label>
+        <label><input id="elytra" type="checkbox"> elytra</label>
+        <select id="elytra-pose"><option>standing</option><option>crouching</option><option>flying</option></select>
         <label class="upload">cape…<input id="cape-file" type="file" accept=".png,.sheet,.zip" multiple></label>
         <span id="cape-name" class="hint"></span>
     </div>

@@ -70,12 +70,19 @@ try {
     setEmote(emote, "wave");
     control("emote").onchange = (e) => (e.target.checked ? renderer.play(PLAYER, now()) : renderer.stop(PLAYER));
 
+    // As in game, the elytra replaces the cape and wears its texture.
+    let cape;
     function setCape(still, sheet, name) {
-        renderer.loadCape(CAPE, still, sheet, name);
+        cape = { still, sheet, name };
+        const load = control("elytra").checked ? renderer.loadElytra : renderer.loadCape;
+        load.call(renderer, CAPE, still, sheet, name);
+        renderer.setElytraPose(CAPE, control("elytra-pose").value);
         renderer.setVisible(CAPE, control("cape").checked);
         control("cape-name").textContent = name;
     }
     control("cape").onchange = (e) => renderer.setVisible(CAPE, e.target.checked);
+    control("elytra").onchange = () => cape && setCape(cape.still, cape.sheet, cape.name);
+    control("elytra-pose").onchange = (e) => renderer.setElytraPose(CAPE, e.target.value);
 
     // Changing the body slot reloads, since binding happens at load.
     async function addCosmetic({ name, body, on, source }) {
