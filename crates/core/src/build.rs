@@ -41,6 +41,7 @@ impl Default for Light {
 }
 
 // ponytail: vanilla light curve without the lightmap's gamma or dimension ambient.
+// Port the lightmap if a host needs lit renders to match the game exactly.
 fn brightness(level: f32) -> f32 {
     let f = (level / 15.0).clamp(0.0, 1.0);
     f / (4.0 - 3.0 * f)
@@ -92,6 +93,10 @@ pub struct Buffers {
     verts: Vec<Vertex>,
     polys: Vec<Poly>,
     order: Vec<u32>,
+    /// Spent id lists, reused so a frame's sort doesn't allocate.
+    pool: Vec<Vec<u32>>,
+    /// `split`'s back piece while the front is written.
+    scratch: Vec<Vertex>,
 }
 
 #[derive(Clone, Copy)]
@@ -106,11 +111,12 @@ struct Poly {
     len: u32,
     shade: f32,
     texture: u32,
+    /// The source face's, kept by every piece cut from it. `None` if degenerate.
+    plane: Option<([f32; 3], f32)>,
 }
 
-/// Far/near corner depth ratios above which a quad is subdivided.
-const SUBDIVIDE_2X: f32 = 1.08;
-const SUBDIVIDE_4X: f32 = 1.35;
+/// Far/near depth ratio above which a polygon is sliced for texture accuracy.
+const MAX_DEPTH_RATIO: f32 = 1.08;
 
 const PLANE_EPSILON: f32 = 1e-3;
 
@@ -138,11 +144,21 @@ impl Buffers {
         let proj = Proj::new(viewport);
         self.collect(instances, camera, light, &proj);
 
-        let all: Vec<u32> = (0..self.polys.len() as u32).collect();
-        let mut order = std::mem::take(&mut self.order);
-        self.back_to_front(all, &mut order);
+        let mut all = self.pool.pop().unwrap_or_default();
+        all.extend(0..self.polys.len() as u32);
+        let mut sorted = std::mem::take(&mut self.order);
+        self.back_to_front(all, &mut sorted);
+
+        // Sliced after sorting: pieces of one polygon are coplanar, so any order among them is exact.
+        let mut order = self.pool.pop().unwrap_or_default();
+        for &id in &sorted {
+            self.slice(id, &mut order);
+        }
         self.emit(&order, &proj);
-        self.order = order;
+
+        order.clear();
+        self.pool.push(order);
+        self.order = sorted;
     }
 
     fn collect(&mut self, instances: &[Instance], camera: &Camera, light: &Light, proj: &Proj) {
@@ -179,28 +195,17 @@ impl Buffers {
                             * level_brightness;
                         let uvs = face_uvs(inst, uv);
 
-                        let n = subdivisions(&view);
-                        let step = 1.0 / n as f32;
-
-                        for row in 0..n {
-                            for col in 0..n {
-                                let (s0, t0) = (col as f32 * step, row as f32 * step);
-                                let (s1, t1) = (s0 + step, t0 + step);
-                                let start = self.verts.len() as u32;
-                                for (s, t) in [(s0, t0), (s1, t0), (s1, t1), (s0, t1)] {
-                                    self.verts.push(Vertex {
-                                        pos: bilinear(&view, s, t),
-                                        uv: bilinear(&uvs, s, t),
-                                    });
-                                }
-                                self.polys.push(Poly {
-                                    start,
-                                    len: 4,
-                                    shade,
-                                    texture: inst.texture,
-                                });
-                            }
+                        let start = self.verts.len() as u32;
+                        for (pos, uv) in view.into_iter().zip(uvs) {
+                            self.verts.push(Vertex { pos, uv });
                         }
+                        self.polys.push(Poly {
+                            start,
+                            len: 4,
+                            shade,
+                            texture: inst.texture,
+                            plane: plane(&view),
+                        });
                     }
                 }
             }
@@ -208,35 +213,33 @@ impl Buffers {
     }
 
     /// Painter's order by BSP, exact where geometry interpenetrates. The eye is the view origin.
-    // ponytail: first polygon as splitter, rebuilt every frame.
-    // Pick by fewest splits if scenes grow.
-    fn back_to_front(&mut self, ids: Vec<u32>, out: &mut Vec<u32>) {
-        let Some((&splitter, rest)) = ids.split_first() else {
-            return;
-        };
-        if rest.is_empty() {
-            out.push(splitter);
+    // ponytail: rebuilt every frame, splitter picked from a few sampled candidates.
+    // Cache the tree per pose if scenes grow.
+    fn back_to_front(&mut self, mut ids: Vec<u32>, out: &mut Vec<u32>) {
+        if ids.len() <= 1 {
+            out.extend_from_slice(&ids);
+            ids.clear();
+            self.pool.push(ids);
             return;
         }
 
-        let Some((normal, d)) = self.plane(splitter) else {
+        let best = self.best_splitter(&ids);
+        ids.swap(0, best);
+        let splitter = ids[0];
+        let Some((normal, d)) = self.polys[splitter as usize].plane else {
             // Degenerate: covers nothing, can go anywhere.
             out.push(splitter);
-            return self.back_to_front(rest.to_vec(), out);
+            ids.remove(0);
+            return self.back_to_front(ids, out);
         };
 
-        let mut on = vec![splitter];
-        let (mut front, mut back) = (Vec::new(), Vec::new());
-        for &id in rest {
-            let poly = self.polys[id as usize];
-            let (mut ahead, mut behind) = (false, false);
-            for v in &self.verts[poly.start as usize..(poly.start + poly.len) as usize] {
-                let dist = dot(normal, v.pos) + d;
-                ahead |= dist > PLANE_EPSILON;
-                behind |= dist < -PLANE_EPSILON;
-            }
+        let mut on = self.pool.pop().unwrap_or_default();
+        let mut front = self.pool.pop().unwrap_or_default();
+        let mut back = self.pool.pop().unwrap_or_default();
+        on.push(splitter);
 
-            match (ahead, behind) {
+        for &id in &ids[1..] {
+            match self.side(id, normal, d) {
                 (false, false) => on.push(id),
                 (true, false) => front.push(id),
                 (false, true) => back.push(id),
@@ -261,46 +264,97 @@ impl Buffers {
         self.back_to_front(far, out);
         out.extend_from_slice(&on);
         self.back_to_front(near, out);
+
+        for mut spent in [ids, on] {
+            spent.clear();
+            self.pool.push(spent);
+        }
     }
 
-    /// Unit normal and offset, by Newell's method (stable on split slivers).
-    fn plane(&self, id: u32) -> Option<([f32; 3], f32)> {
-        let poly = self.polys[id as usize];
-        let verts = &self.verts[poly.start as usize..(poly.start + poly.len) as usize];
-        let mut n = [0.0f32; 3];
-        let mut centre = [0.0f32; 3];
+    /// Index into `ids` of the candidate plane that splits least and halves best.
+    fn best_splitter(&self, ids: &[u32]) -> usize {
+        const CANDIDATES: usize = 4;
+        const SPLIT_COST: usize = 4;
+        let step = (ids.len() / CANDIDATES).max(1);
+        let mut best = (usize::MAX, 0);
 
-        for (i, a) in verts.iter().enumerate() {
-            let b = verts[(i + 1) % verts.len()];
-            let (a, b) = (a.pos, b.pos);
-            n[0] += (a[1] - b[1]) * (a[2] + b[2]);
-            n[1] += (a[2] - b[2]) * (a[0] + b[0]);
-            n[2] += (a[0] - b[0]) * (a[1] + b[1]);
-            for k in 0..3 {
-                centre[k] += a[k] / verts.len() as f32;
+        for i in (0..ids.len()).step_by(step).take(CANDIDATES) {
+            let Some((normal, d)) = self.polys[ids[i] as usize].plane else {
+                continue;
+            };
+
+            let (mut front, mut back, mut splits) = (0usize, 0usize, 0usize);
+            for (seen, &id) in ids.iter().enumerate() {
+                match self.side(id, normal, d) {
+                    (true, false) => front += 1,
+                    (false, true) => back += 1,
+                    (true, true) => splits += 1,
+                    _ => {}
+                }
+
+                // The rest can only even out the imbalance, so stop once this can't win.
+                let left = ids.len() - seen - 1;
+                if splits * SPLIT_COST + front.abs_diff(back).saturating_sub(left) >= best.0 {
+                    break;
+                }
+            }
+
+            let score = splits * SPLIT_COST + front.abs_diff(back);
+            if score < best.0 {
+                best = (score, i);
             }
         }
 
-        let len = dot(n, n).sqrt();
-        if len < 1e-9 {
-            return None;
-        }
-        let n = [n[0] / len, n[1] / len, n[2] / len];
-        Some((n, -dot(n, centre)))
+        best.1
     }
 
+    /// Whether any vertex is ahead of the plane, and whether any is behind it.
+    fn side(&self, id: u32, normal: [f32; 3], d: f32) -> (bool, bool) {
+        let poly = self.polys[id as usize];
+        let (mut ahead, mut behind) = (false, false);
+        for v in &self.verts[poly.start as usize..(poly.start + poly.len) as usize] {
+            let dist = dot(normal, v.pos) + d;
+            ahead |= dist > PLANE_EPSILON;
+            behind |= dist < -PLANE_EPSILON;
+        }
+
+        (ahead, behind)
+    }
+
+    /// Cut at constant depths until no piece's far/near ratio exceeds `MAX_DEPTH_RATIO`.
+    /// Skia interpolates UVs affinely, exact only along lines of constant depth.
+    fn slice(&mut self, id: u32, out: &mut Vec<u32>) {
+        let poly = self.polys[id as usize];
+        let (mut near, mut far) = (f32::MAX, 0.0f32);
+        for v in &self.verts[poly.start as usize..(poly.start + poly.len) as usize] {
+            near = near.min(-v.pos[2]);
+            far = far.max(-v.pos[2]);
+        }
+
+        if far <= near * MAX_DEPTH_RATIO {
+            out.push(id);
+            return;
+        }
+
+        // Geometric middle, so both halves have the same ratio.
+        let (a, b) = self.split(id, [0.0, 0.0, 1.0], (near * far).sqrt());
+        self.slice(a, out);
+        self.slice(b, out);
+    }
+
+    /// Front piece is written straight after the existing vertices, back piece after it.
     fn split(&mut self, id: u32, normal: [f32; 3], d: f32) -> (u32, u32) {
         let poly = self.polys[id as usize];
-        let src: Vec<Vertex> =
-            self.verts[poly.start as usize..(poly.start + poly.len) as usize].to_vec();
-        let (mut front, mut back) = (Vec::with_capacity(6), Vec::with_capacity(6));
+        let (start, len) = (poly.start as usize, poly.len as usize);
+        let mut back = std::mem::take(&mut self.scratch);
+        let front_start = self.verts.len();
 
-        for (i, &a) in src.iter().enumerate() {
-            let b = src[(i + 1) % src.len()];
+        for i in 0..len {
+            let (a, b) = (self.verts[start + i], self.verts[start + (i + 1) % len]);
             let (da, db) = (dot(normal, a.pos) + d, dot(normal, b.pos) + d);
 
             if da >= -PLANE_EPSILON {
-                front.push(a);
+                self.verts.push(a);
             }
             if da <= PLANE_EPSILON {
                 back.push(a);
@@ -313,23 +367,28 @@ impl Buffers {
                     pos: std::array::from_fn(|k| a.pos[k] + (b.pos[k] - a.pos[k]) * t),
                     uv: std::array::from_fn(|k| a.uv[k] + (b.uv[k] - a.uv[k]) * t),
                 };
-                front.push(cut);
+                self.verts.push(cut);
                 back.push(cut);
             }
         }
 
-        let mut push = |verts: Vec<Vertex>| {
-            let start = self.verts.len() as u32;
-            self.verts.extend(verts.iter());
-            self.polys.push(Poly {
-                start,
-                len: (self.verts.len() as u32) - start,
-                ..poly
-            });
-            self.polys.len() as u32 - 1
-        };
+        let back_start = self.verts.len();
+        self.verts.extend_from_slice(&back);
+        self.polys.push(Poly {
+            start: front_start as u32,
+            len: (back_start - front_start) as u32,
+            ..poly
+        });
+        self.polys.push(Poly {
+            start: back_start as u32,
+            len: back.len() as u32,
+            ..poly
+        });
 
-        (push(front), push(back))
+        back.clear();
+        self.scratch = back;
+        let n = self.polys.len() as u32;
+        (n - 2, n - 1)
     }
 
     fn emit(&mut self, order: &[u32], proj: &Proj) {
@@ -370,7 +429,12 @@ impl Buffers {
     }
 }
 
+/// Most cubes are unrotated, so they skip the trig and the pivot round trip.
 pub(crate) fn cube_transform(bone_tf: Affine, cube: &Cube) -> Affine {
+    if cube.rotation == [0.0; 3] {
+        return bone_tf;
+    }
+
     bone_tf.mul(&Affine::about(cube.pivot, &bedrock_rotation(cube.rotation)))
 }
 
@@ -425,33 +489,27 @@ fn front_facing(view: &[[f32; 3]; 4], proj: &Proj) -> bool {
     area > 0.0
 }
 
-/// Skia interpolates UVs affinely, so subdividing bounds the depth range per patch.
-fn subdivisions(view: &[[f32; 3]; 4]) -> usize {
-    let mut near = f32::MAX;
-    let mut far: f32 = 0.0;
-    for v in view {
-        let w = -v[2];
-        near = near.min(w);
-        far = far.max(w);
+/// Unit normal and offset, by Newell's method.
+fn plane(verts: &[[f32; 3]]) -> Option<([f32; 3], f32)> {
+    let mut n = [0.0f32; 3];
+    let mut centre = [0.0f32; 3];
+
+    for (i, &a) in verts.iter().enumerate() {
+        let b = verts[(i + 1) % verts.len()];
+        n[0] += (a[1] - b[1]) * (a[2] + b[2]);
+        n[1] += (a[2] - b[2]) * (a[0] + b[0]);
+        n[2] += (a[0] - b[0]) * (a[1] + b[1]);
+        for k in 0..3 {
+            centre[k] += a[k] / verts.len() as f32;
+        }
     }
 
-    let ratio = far / near;
-    if ratio > SUBDIVIDE_4X {
-        4
-    } else if ratio > SUBDIVIDE_2X {
-        2
-    } else {
-        1
+    let len = dot(n, n).sqrt();
+    if len < 1e-9 {
+        return None;
     }
-}
-
-/// Corners TL, TR, BR, BL. Exact since box faces stay parallelograms.
-fn bilinear<const N: usize>(q: &[[f32; N]; 4], s: f32, t: f32) -> [f32; N] {
-    std::array::from_fn(|i| {
-        let top = q[0][i] + (q[1][i] - q[0][i]) * s;
-        let bot = q[3][i] + (q[2][i] - q[3][i]) * s;
-        top + (bot - top) * t
-    })
+    let n = [n[0] / len, n[1] / len, n[2] / len];
+    Some((n, -dot(n, centre)))
 }
 
 fn pack_shade(shade: f32) -> u32 {

@@ -15,6 +15,7 @@ const CAPE_GEO: &str = include_str!("../assets/cape.geo.json");
 
 /// Vanilla's cape, parented to `body`, leaning 6 degrees back, outside (uv (1,1)) facing away.
 // ponytail: fixed at the standing lean, but a host can swing it through the `cape` bone's pose.
+// Simulate the swing in the core if a host without the game needs a moving cape.
 pub fn cape() -> Model {
     bedrock::parse_one(CAPE_GEO).expect("baked cape geometry must parse")
 }

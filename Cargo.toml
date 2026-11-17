@@ -14,3 +14,5 @@ strip = true
 [profile.native]
 inherits = "release"
 panic = "unwind"
+# Not size: per-frame speed in the game matters more (mesh builds ~2.5x faster than at "s").
+opt-level = 3
