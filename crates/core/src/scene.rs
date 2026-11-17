@@ -8,7 +8,7 @@ use crate::java;
 use crate::math::Affine;
 use crate::mesh::Mesh;
 use crate::molang::{Interner, Runtime};
-use crate::player::{self, Arms};
+use crate::player::{self, Arms, ElytraPose};
 use crate::pose::{world_transforms, BonePose, Pose};
 use crate::Model;
 
@@ -162,6 +162,19 @@ impl Scene {
     pub fn load_cape(&mut self, slot: usize, frames: u32, frame_seconds: f32) {
         self.slot(slot)
             .set_model(player::cape(), true, frames, frame_seconds);
+    }
+
+    /// Takes the cape's texture and sheet, as vanilla draws a cape onto the elytra.
+    pub fn load_elytra(&mut self, slot: usize, frames: u32, frame_seconds: f32) {
+        self.slot(slot)
+            .set_model(player::elytra(), true, frames, frame_seconds);
+    }
+
+    /// Poses an elytra slot's wings. Other slots are left alone.
+    pub fn set_elytra_pose(&mut self, slot: usize, pose: ElytraPose) {
+        if let Some(model) = &mut self.slot(slot).model {
+            player::pose_elytra(model, pose);
+        }
     }
 
     /// Uses the file's first animation, which stays at rest until `play`.

@@ -5,7 +5,7 @@ use std::alloc::{alloc as raw_alloc, dealloc as raw_dealloc, Layout};
 
 use plusrenderer::build::{Camera, DrawRun};
 use plusrenderer::mesh::MeshRun;
-use plusrenderer::{bedrock, bundle, java, Affine, Arms, BodySlot, Scene};
+use plusrenderer::{bedrock, bundle, java, Affine, Arms, BodySlot, ElytraPose, Scene};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod jvm;
@@ -116,19 +116,75 @@ pub unsafe extern "C" fn renderer_load_cape(
     name_ptr: *const u8,
     name_len: u32,
 ) -> i32 {
-    let name = str_from(name_ptr, name_len).unwrap_or("");
-    let (frames, seconds) = if sheet_width > 0 {
-        bundle::cape_sheet(
-            [still_width, still_height],
-            [sheet_width, sheet_height],
-            name,
-        )
-    } else {
-        (1, 0.1)
-    };
+    let (frames, seconds) = sheet_frames(
+        [still_width, still_height],
+        [sheet_width, sheet_height],
+        name_ptr,
+        name_len,
+    );
 
     (*r).scene.load_cape(slot as usize, frames, seconds);
     frames as i32
+}
+
+/// As `renderer_load_cape`, but vanilla's elytra, drawn with the same cape texture or sheet.
+/// # Safety
+/// `name_ptr`/`name_len` must describe UTF-8 bytes valid for this call.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn renderer_load_elytra(
+    r: *mut Renderer,
+    slot: u32,
+    still_width: u32,
+    still_height: u32,
+    sheet_width: u32,
+    sheet_height: u32,
+    name_ptr: *const u8,
+    name_len: u32,
+) -> i32 {
+    let (frames, seconds) = sheet_frames(
+        [still_width, still_height],
+        [sheet_width, sheet_height],
+        name_ptr,
+        name_len,
+    );
+
+    (*r).scene.load_elytra(slot as usize, frames, seconds);
+    frames as i32
+}
+
+/// Frame count and seconds per frame. One still frame if there is no sheet.
+unsafe fn sheet_frames(
+    still: [u32; 2],
+    sheet: [u32; 2],
+    name_ptr: *const u8,
+    name_len: u32,
+) -> (u32, f32) {
+    if sheet[0] == 0 {
+        return (1, 0.1);
+    }
+
+    let name = str_from(name_ptr, name_len).unwrap_or("");
+    bundle::cape_sheet(still, sheet, name)
+}
+
+/// `pose` 0 standing (and swimming), 1 crouching, 2 flying. `fall` is the flying dive, 0..=1.
+/// # Safety
+/// `r` must come from `renderer_new`.
+#[no_mangle]
+pub unsafe extern "C" fn renderer_set_elytra_pose(
+    r: *mut Renderer,
+    slot: u32,
+    pose: u32,
+    fall: f32,
+) {
+    let pose = match pose {
+        1 => ElytraPose::Crouching,
+        2 => ElytraPose::Flying { fall },
+        _ => ElytraPose::Standing,
+    };
+
+    (*r).scene.set_elytra_pose(slot as usize, pose);
 }
 
 /// Index into newline-joined `names` by `kind`: 0 geometry, 1 animation, 2 texture, 3 sheet, or -1.

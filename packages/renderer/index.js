@@ -141,11 +141,17 @@ export class Renderer {
 
     // Animates if `sheet` stacks frames of the still's size, and `sheetName` may set the pace.
     loadCape(slot, still, sheet, sheetName = "") {
+        this.loadCapeModel(this.wasm.renderer_load_cape, slot, still, sheet, sheetName);
+    }
+
+    // Vanilla's elytra, drawn with a cape texture or sheet as loadCape takes.
+    loadElytra(slot, still, sheet, sheetName = "") {
+        this.loadCapeModel(this.wasm.renderer_load_elytra, slot, still, sheet, sheetName);
+    }
+
+    loadCapeModel(load, slot, still, sheet, sheetName) {
         const frames = this.withStrings([sheetName], (ptr, len) =>
-            this.wasm.renderer_load_cape(
-                this.handle, slot, still.width, still.height,
-                sheet?.width ?? 0, sheet?.height ?? 0, ptr, len,
-            ),
+            load(this.handle, slot, still.width, still.height, sheet?.width ?? 0, sheet?.height ?? 0, ptr, len),
         );
         this.setTexture(slot, frames > 1 ? sheet : still);
     }
@@ -169,6 +175,11 @@ export class Renderer {
 
     stop(slot) {
         this.wasm.renderer_stop(this.handle, slot);
+    }
+
+    // "standing" (also swimming), "crouching" or "flying". `fall` is how steeply it dives, 0..1.
+    setElytraPose(slot, pose, fall = 0) {
+        this.wasm.renderer_set_elytra_pose(this.handle, slot, ["standing", "crouching", "flying"].indexOf(pose), fall);
     }
 
     setVisible(slot, visible) {

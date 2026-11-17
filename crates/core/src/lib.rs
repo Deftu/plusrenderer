@@ -19,5 +19,5 @@ pub use build::Camera;
 pub use cosmetic::BodySlot;
 pub use ir::Model;
 pub use math::Affine;
-pub use player::Arms;
+pub use player::{Arms, ElytraPose};
 pub use scene::Scene;

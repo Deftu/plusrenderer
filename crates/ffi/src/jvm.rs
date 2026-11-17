@@ -43,7 +43,10 @@ fn words<T>(runs: &[T]) -> &[i32] {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nCreate(_: JNIEnv, _: JClass) -> jlong {
+pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nCreate(
+    _: JNIEnv,
+    _: JClass,
+) -> jlong {
     renderer_new() as jlong
 }
 
@@ -135,6 +138,31 @@ pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nLoadCape
 }
 
 #[no_mangle]
+pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nLoadElytra(
+    mut env: JNIEnv,
+    _: JClass,
+    r: jlong,
+    slot: jint,
+    still_width: jint,
+    still_height: jint,
+    sheet_width: jint,
+    sheet_height: jint,
+    name: JString,
+) -> jint {
+    let name = text(&mut env, &name);
+    renderer_load_elytra(
+        r as *mut Renderer,
+        slot as u32,
+        still_width as u32,
+        still_height as u32,
+        sheet_width as u32,
+        sheet_height as u32,
+        name.as_ptr(),
+        len(&name),
+    )
+}
+
+#[no_mangle]
 pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nBundlePart(
     mut env: JNIEnv,
     _: JClass,
@@ -176,6 +204,18 @@ pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nStop(
     slot: jint,
 ) {
     renderer_stop(r as *mut Renderer, slot as u32);
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nSetElytraPose(
+    _: JNIEnv,
+    _: JClass,
+    r: jlong,
+    slot: jint,
+    pose: jint,
+    fall: jfloat,
+) {
+    renderer_set_elytra_pose(r as *mut Renderer, slot as u32, pose as u32, fall);
 }
 
 #[no_mangle]

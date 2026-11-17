@@ -29,6 +29,9 @@ public final class Renderer implements AutoCloseable {
     /** {@link #bundlePart} kinds. */
     public static final int GEOMETRY = 0, ANIMATION = 1, TEXTURE = 2, SHEET = 3;
 
+    /** {@link #setElytraPose} poses. Swimming keeps the standing wings. */
+    public static final int ELYTRA_STANDING = 0, ELYTRA_CROUCHING = 1, ELYTRA_FLYING = 2;
+
     static {
         load();
     }
@@ -49,6 +52,11 @@ public final class Renderer implements AutoCloseable {
         return nLoadCape(handle(), slot, stillWidth, stillHeight, sheetWidth, sheetHeight, sheetName);
     }
 
+    /** As {@link #loadCape}, but vanilla's elytra, drawn with the same cape texture or sheet. */
+    public int loadElytra(int slot, int stillWidth, int stillHeight, int sheetWidth, int sheetHeight, String sheetName) {
+        return nLoadElytra(handle(), slot, stillWidth, stillHeight, sheetWidth, sheetHeight, sheetName);
+    }
+
     public void loadAnimation(int slot, String json) {
         check(nLoadAnimation(handle(), slot, json));
     }
@@ -67,6 +75,11 @@ public final class Renderer implements AutoCloseable {
 
     public void stop(int slot) {
         nStop(handle(), slot);
+    }
+
+    /** {@code fall} is how steeply a flying player dives, 0..1: {@code max(0, -velocity.normalize().y)}. */
+    public void setElytraPose(int slot, int pose, float fall) {
+        nSetElytraPose(handle(), slot, pose, fall);
     }
 
     public void setVisible(int slot, boolean visible) {
@@ -249,10 +262,12 @@ public final class Renderer implements AutoCloseable {
     private static native void nLoadPlayer(long r, int slot, boolean slim);
     private static native int nLoadCosmetic(long r, int slot, String json, String body, String anchor, int imageWidth, int imageHeight);
     private static native int nLoadCape(long r, int slot, int stillWidth, int stillHeight, int sheetWidth, int sheetHeight, String name);
+    private static native int nLoadElytra(long r, int slot, int stillWidth, int stillHeight, int sheetWidth, int sheetHeight, String name);
     private static native int nBundlePart(String names, int kind);
     private static native int nLoadAnimation(long r, int slot, String json);
     private static native void nPlay(long r, int slot, float at);
     private static native void nStop(long r, int slot);
+    private static native void nSetElytraPose(long r, int slot, int pose, float fall);
     private static native void nSetVisible(long r, int slot, boolean visible);
     private static native void nSetScale(long r, int slot, float scale);
     private static native void nClear(long r, int slot);
