@@ -2,7 +2,7 @@
 //! arrays copied out. The Java side checks handles and turns the -1 codes into exceptions.
 #![allow(non_snake_case, clippy::missing_safety_doc, clippy::too_many_arguments)]
 
-use jni::objects::{JClass, JString};
+use jni::objects::{JClass, JFloatArray, JString};
 use jni::sys::{jboolean, jbyteArray, jfloat, jfloatArray, jint, jintArray, jlong, jstring};
 use jni::JNIEnv;
 
@@ -481,4 +481,174 @@ pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nRuns(
     r: jlong,
 ) -> jintArray {
     ints(&mut env, words(&scene(r).buffers.runs))
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nPartId(
+    mut env: JNIEnv,
+    _: JClass,
+    r: jlong,
+    name: JString,
+) -> jint {
+    let name = text(&mut env, &name);
+    renderer_part_id(r as *mut Renderer, name.as_ptr(), len(&name)) as jint
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nQueryId(
+    mut env: JNIEnv,
+    _: JClass,
+    r: jlong,
+    name: JString,
+) -> jint {
+    let name = text(&mut env, &name);
+    renderer_query_id(r as *mut Renderer, name.as_ptr(), len(&name)) as jint
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nBuildSkin(
+    _: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jint {
+    renderer_build_skin(r as *mut Renderer)
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nLayout(
+    _: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jint {
+    renderer_layout(r as *const Renderer) as jint
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nSkinBoneCount(
+    _: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jint {
+    renderer_skin_bone_count(r as *const Renderer) as jint
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nSkinPositions(
+    mut env: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jfloatArray {
+    floats(&mut env, &scene(r).skin.positions)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nSkinNormals(
+    mut env: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jfloatArray {
+    floats(&mut env, &scene(r).skin.normals)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nSkinUvs(
+    mut env: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jfloatArray {
+    floats(&mut env, &scene(r).skin.uvs)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nSkinGlow(
+    env: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jbyteArray {
+    env.byte_array_from_slice(&scene(r).skin.glow)
+        .map_or(std::ptr::null_mut(), |a| a.into_raw())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nSkinBones(
+    mut env: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jintArray {
+    ints(&mut env, words(&scene(r).skin.bones))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nSkinRuns(
+    mut env: JNIEnv,
+    _: JClass,
+    r: jlong,
+) -> jintArray {
+    ints(&mut env, words(&scene(r).skin.runs))
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_org_polyfrost_plusrenderer_Renderer_nFrame(
+    env: JNIEnv,
+    _: JClass,
+    r: jlong,
+    seconds: jfloat,
+    input: JFloatArray,
+    part_count: jint,
+    query_count: jint,
+    space: jint,
+    out: JFloatArray,
+) -> jint {
+    let renderer = &mut *(r as *mut Renderer);
+    let (parts, queries) = (part_count.max(0) as usize * 12, query_count.max(0) as usize);
+
+    renderer.input.resize(parts + queries, 0.0);
+    if env
+        .get_float_array_region(&input, 0, &mut renderer.input)
+        .is_err()
+    {
+        return fail(
+            renderer,
+            "input holds fewer floats than its parts and queries",
+        );
+    }
+    let input = std::mem::take(&mut renderer.input);
+    let bones = renderer_frame(
+        renderer,
+        seconds,
+        input.as_ptr(),
+        part_count.max(0) as u32,
+        input[parts..].as_ptr(),
+        query_count.max(0) as u32,
+        space as u32,
+    );
+    renderer.input = input;
+    if bones < 0 {
+        return bones;
+    }
+
+    let scene = &renderer.scene;
+    let needed = scene.skin_transforms.len() + scene.skin_offsets.len();
+    let held = env.get_array_length(&out).unwrap_or(0) as usize;
+    if held < needed {
+        return fail(
+            renderer,
+            &format!("out holds {held} floats, the frame needs {needed}"),
+        );
+    }
+    let written = env
+        .set_float_array_region(&out, 0, &scene.skin_transforms)
+        .is_ok()
+        && env
+            .set_float_array_region(
+                &out,
+                scene.skin_transforms.len() as i32,
+                &scene.skin_offsets,
+            )
+            .is_ok();
+    if written {
+        bones
+    } else {
+        fail(renderer, "could not write the frame")
+    }
 }

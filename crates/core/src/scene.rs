@@ -6,7 +6,7 @@ use crate::build::{Buffers, Camera, Instance, Light};
 use crate::cosmetic::{self, BodySlot};
 use crate::java;
 use crate::math::Affine;
-use crate::mesh::Mesh;
+use crate::mesh::{Mesh, Skin};
 use crate::molang::{Interner, Runtime};
 use crate::player::{self, Arms, ElytraPose};
 use crate::pose::{world_transforms, BonePose, Pose};
@@ -133,9 +133,14 @@ pub struct Scene {
     game_parts: Vec<GamePart>,
     queries: Vec<(String, f32)>,
     seconds: f32,
+    layout: u32,
+    skin_layout: Option<u32>,
     pub light: Light,
     pub buffers: Buffers,
     pub mesh: Mesh,
+    pub skin: Skin,
+    pub skin_transforms: Vec<f32>,
+    pub skin_offsets: Vec<f32>,
 }
 
 impl Scene {
@@ -146,8 +151,13 @@ impl Scene {
         &mut self.slots[index]
     }
 
+    fn reshape(&mut self, index: usize) -> &mut Slot {
+        self.layout = self.layout.wrapping_add(1);
+        self.slot(index)
+    }
+
     pub fn load_player(&mut self, slot: usize, arms: Arms) {
-        self.slot(slot)
+        self.reshape(slot)
             .set_model(player::model(arms), true, 1, COSMETIC_FRAME_SECONDS);
     }
 
@@ -161,25 +171,25 @@ impl Scene {
         image_size: Option<[u32; 2]>,
     ) {
         let frames = cosmetic::prepare(&mut model, body, anchor, image_size);
-        self.slot(slot)
+        self.reshape(slot)
             .set_model(model, false, frames, COSMETIC_FRAME_SECONDS);
     }
 
     /// Multi-frame textures come from `bundle::cape_sheet`.
     pub fn load_cape(&mut self, slot: usize, frames: u32, frame_seconds: f32) {
-        self.slot(slot)
+        self.reshape(slot)
             .set_model(player::cape(), true, frames, frame_seconds);
     }
 
     /// Takes the cape's texture and sheet, as vanilla draws a cape onto the elytra.
     pub fn load_elytra(&mut self, slot: usize, frames: u32, frame_seconds: f32) {
-        self.slot(slot)
+        self.reshape(slot)
             .set_model(player::elytra(), true, frames, frame_seconds);
     }
 
     /// Poses an elytra slot's wings. Other slots are left alone.
     pub fn set_elytra_pose(&mut self, slot: usize, pose: ElytraPose) {
-        if let Some(model) = &mut self.slot(slot).model {
+        if let Some(model) = &mut self.reshape(slot).model {
             player::pose_elytra(model, pose);
         }
     }
@@ -223,10 +233,15 @@ impl Scene {
     }
 
     pub fn set_visible(&mut self, slot: usize, visible: bool) {
-        self.slot(slot).visible = visible;
+        let s = self.slot(slot);
+        if s.visible != visible {
+            s.visible = visible;
+            self.layout = self.layout.wrapping_add(1);
+        }
     }
 
     pub fn clear(&mut self, slot: usize) {
+        self.layout = self.layout.wrapping_add(1);
         if let Some(s) = self.slots.get_mut(slot) {
             *s = Slot::new();
         }
@@ -234,9 +249,23 @@ impl Scene {
 
     /// Applies to every slot from the next `pose` and overrides the core's `life_time`.
     pub fn set_query(&mut self, name: &str, value: f32) {
-        match self.queries.iter_mut().find(|(n, _)| n == name) {
-            Some(entry) => entry.1 = value,
-            None => self.queries.push((name.to_string(), value)),
+        let id = self.query_id(name);
+        self.queries[id].1 = value;
+    }
+
+    pub fn query_id(&mut self, name: &str) -> usize {
+        match self.queries.iter().position(|(n, _)| n == name) {
+            Some(id) => id,
+            None => {
+                self.queries.push((name.to_string(), 0.0));
+                self.queries.len() - 1
+            }
+        }
+    }
+
+    pub fn set_query_at(&mut self, id: usize, value: f32) {
+        if let Some(entry) = self.queries.get_mut(id) {
+            entry.1 = value;
         }
     }
 
@@ -260,20 +289,50 @@ impl Scene {
     /// `bone` is a core name (`head`, `rightArm`, ..., `root`).
     /// Cosmetics then follow the game's limbs.
     pub fn set_game_part(&mut self, bone: &str, rest: [f32; 3], part: &java::Part) {
-        let posed = GamePart {
-            bone: bone.to_string(),
-            transform: java::part_transform(rest, part),
-            pivot: java::rest_pivot(rest),
-        };
+        let id = self.part_id(bone);
+        self.set_game_part_at(id, rest, part);
+    }
 
-        match self.game_parts.iter_mut().find(|p| p.bone == bone) {
-            Some(entry) => *entry = posed,
-            None => self.game_parts.push(posed),
+    pub fn part_id(&mut self, bone: &str) -> usize {
+        match self.game_parts.iter().position(|p| p.bone == bone) {
+            Some(id) => id,
+            None => {
+                self.game_parts.push(GamePart {
+                    bone: bone.to_string(),
+                    transform: Affine::IDENTITY,
+                    pivot: [0.0; 3],
+                    active: false,
+                });
+                self.game_parts.len() - 1
+            }
+        }
+    }
+
+    pub fn set_game_part_at(&mut self, id: usize, rest: [f32; 3], part: &java::Part) {
+        if let Some(entry) = self.game_parts.get_mut(id) {
+            entry.transform = java::part_transform(rest, part);
+            entry.pivot = java::rest_pivot(rest);
+            entry.active = true;
+        }
+    }
+
+    pub fn set_game_parts(&mut self, parts: &[([f32; 3], java::Part)]) {
+        for (id, entry) in self.game_parts.iter_mut().enumerate() {
+            match parts.get(id) {
+                Some((rest, part)) => {
+                    entry.transform = java::part_transform(*rest, part);
+                    entry.pivot = java::rest_pivot(*rest);
+                    entry.active = true;
+                }
+                None => entry.active = false,
+            }
         }
     }
 
     pub fn clear_game_parts(&mut self) {
-        self.game_parts.clear();
+        for part in &mut self.game_parts {
+            part.active = false;
+        }
     }
 
     /// A game host adds `java::part_delta` of this to the vanilla part to play the emote.
@@ -296,6 +355,27 @@ impl Scene {
         let instances = instances(&self.slots, self.seconds);
         self.mesh.build(&instances, to_host);
         &self.mesh
+    }
+
+    pub fn build_skin(&mut self) -> &Skin {
+        if self.skin_layout != Some(self.layout) {
+            let instances = instances(&self.slots, self.seconds);
+            self.skin.build(&instances);
+            self.skin_layout = Some(self.layout);
+        }
+        &self.skin
+    }
+
+    pub fn layout(&self) -> u32 {
+        self.layout
+    }
+
+    pub fn skin_frame(&mut self, to_host: &Affine) {
+        self.build_skin();
+        self.transform();
+        let instances = instances(&self.slots, self.seconds);
+        Skin::transforms(&instances, to_host, &mut self.skin_transforms);
+        self.skin.frame_offsets(&instances, &mut self.skin_offsets);
     }
 
     fn transform(&mut self) {
@@ -342,11 +422,12 @@ struct GamePart {
     bone: String,
     transform: Affine,
     pivot: [f32; 3],
+    active: bool,
 }
 
 /// Composed down vanilla's chain (`root`, `head` for `hat`, the part). Parts are parent-relative.
 fn game_part(parts: &[GamePart], name: &str) -> Option<(Affine, [f32; 3])> {
-    let own = parts.iter().find(|p| p.bone == name)?;
+    let own = parts.iter().find(|p| p.active && p.bone == name)?;
     let parent = match name {
         "root" => None,
         "hat" => game_part(parts, "head").map(|(tf, _)| tf),
@@ -596,5 +677,113 @@ mod tests {
         let runs = &scene.build_mesh(&java::MODEL).runs;
         let cull: Vec<(u32, u32)> = runs.iter().map(|r| (r.texture, r.cull)).collect();
         assert_eq!(cull, [(0, 1), (1, 0)], "player culled, cosmetic two-sided");
+    }
+
+    fn skinned(scene: &Scene) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+        let skin = &scene.skin;
+        let (tf, offsets) = (&scene.skin_transforms, &scene.skin_offsets);
+        let (mut positions, mut normals, mut uvs) = (Vec::new(), Vec::new(), Vec::new());
+        for (r, run) in skin.runs.iter().enumerate() {
+            for v in run.start as usize * 4..(run.start + run.count) as usize * 4 {
+                let b = skin.bones[v] as usize;
+                let m = Affine(tf[b * 12..b * 12 + 12].try_into().unwrap());
+                let at = |a: &[f32]| [a[v * 3], a[v * 3 + 1], a[v * 3 + 2]];
+                positions.extend_from_slice(&m.point(at(&skin.positions)));
+                normals.extend_from_slice(&crate::math::normalize(m.vector(at(&skin.normals))));
+                uvs.extend_from_slice(&[skin.uvs[v * 2], skin.uvs[v * 2 + 1] + offsets[r]]);
+            }
+        }
+        (positions, normals, uvs)
+    }
+
+    fn assert_close(a: &[f32], b: &[f32], what: &str) {
+        assert_eq!(a.len(), b.len(), "{what} length");
+        for (i, (x, y)) in a.iter().zip(b).enumerate() {
+            assert!((x - y).abs() < 1e-4, "{what}[{i}]: {x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn a_posed_skin_is_the_mesh() {
+        let mut scene = scene_with_hat();
+        scene.load_cape(2, 16, 0.1);
+        scene.set_scale(1, 1.3);
+        scene.play(0, 0.0);
+        let crouch = java::Part {
+            offset: [0.0, 3.2, 0.0],
+            rotation: [0.4, 0.1, -0.2],
+            scale: [1.0, 1.1, 0.9],
+        };
+        scene.set_game_part("root", [0.0; 3], &crouch);
+
+        for seconds in [0.0, 0.7, 1.35] {
+            scene.pose(seconds);
+            let mesh = scene.build_mesh(&java::MODEL);
+            let (p, n, uv) = (
+                mesh.positions.clone(),
+                mesh.normals.clone(),
+                mesh.uvs.clone(),
+            );
+            let runs: Vec<_> = mesh
+                .runs
+                .iter()
+                .map(|r| (r.texture, r.start, r.count, r.cull))
+                .collect();
+
+            scene.skin_frame(&java::MODEL);
+            let skin_runs: Vec<_> = scene
+                .skin
+                .runs
+                .iter()
+                .map(|r| (r.texture, r.start, r.count, r.cull))
+                .collect();
+            assert_eq!(skin_runs, runs);
+            assert_eq!(scene.skin.glow, scene.mesh.glow);
+            let (sp, sn, suv) = skinned(&scene);
+            assert_close(&sp, &p, "positions");
+            assert_close(&sn, &n, "normals");
+            assert_close(&suv, &uv, "uvs");
+        }
+    }
+
+    #[test]
+    fn skins_rebuild_only_when_the_layout_changes() {
+        let mut scene = scene_with_hat();
+        scene.build_skin();
+        let layout = scene.layout();
+        scene.play(0, 0.0);
+        scene.set_scale(1, 2.0);
+        scene.set_visible(1, true);
+        scene.pose(1.0);
+        assert_eq!(scene.layout(), layout, "posing moves bones, not quads");
+
+        scene.set_visible(1, false);
+        assert_ne!(scene.layout(), layout);
+        assert!(scene.build_skin().runs.iter().all(|r| r.texture == 0));
+    }
+
+    #[test]
+    fn game_parts_keep_their_ids_when_cleared() {
+        let mut scene = scene_with_hat();
+        let head = scene.part_id("head");
+        let nod = java::Part {
+            offset: [0.0; 3],
+            rotation: [0.5, 0.0, 0.0],
+            scale: [1.0; 3],
+        };
+        let hat = |scene: &mut Scene| {
+            scene.pose(0.0);
+            scene.skin_frame(&Affine::IDENTITY);
+            let first = scene.slots[0].model.as_ref().unwrap().bones.len() * 12;
+            scene.skin_transforms[first..first + 12].to_vec()
+        };
+
+        let rest = hat(&mut scene);
+        scene.clear_game_parts();
+        assert_eq!(scene.part_id("head"), head);
+        scene.set_game_parts(&[([0.0; 3], nod)]);
+        assert_ne!(hat(&mut scene), rest, "the hat follows the game's head");
+        scene.set_game_parts(&[]);
+        assert_eq!(hat(&mut scene), rest, "and the player's once cleared");
     }
 }

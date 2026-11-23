@@ -62,4 +62,53 @@ public class RendererTest {
         assertEquals(0, Renderer.bundlePart(names, Renderer.TEXTURE));
         assertEquals(-1, Renderer.bundlePart(names, Renderer.SHEET));
     }
+
+    @Test
+    public void aSkinPosedByFrameIsTheMesh() {
+        try (Renderer r = new Renderer()) {
+            r.loadPlayer(0, false);
+            r.setVisible(0, false);
+            r.loadCosmetic(1, GLASSES, "glasses", "", 16, 16);
+            int head = r.partId("head");
+            int moving = r.queryId("is_moving");
+            assertEquals(r.partId("head"), head);
+
+            float[] input = new float[12 + 1];
+            input[head * 12 + 6] = 0.5f;
+            input[head * 12 + 9] = input[head * 12 + 10] = input[head * 12 + 11] = 1;
+            input[12 + moving] = 1;
+
+            r.setGamePart("head", 0, 0, 0, 0, 0, 0, 0.5f, 0, 0, 1, 1, 1);
+            r.pose(0);
+            int quads = r.buildMesh(Renderer.JAVA_MODEL_SPACE);
+            float[] mesh = r.meshPositions();
+
+            int layout = r.layout();
+            assertEquals(quads, r.buildSkin());
+            assertArrayEquals(r.meshRuns(), r.skinRuns());
+            float[] skin = r.skinPositions();
+            int[] bones = r.skinBones();
+
+            float[] out = new float[64];
+            int boneCount = r.frame(0, input, 1, 1, Renderer.JAVA_MODEL_SPACE, out);
+            assertEquals(r.skinBoneCount(), boneCount);
+            assertEquals(layout, r.layout());
+            for (int v = 0; v < bones.length; v++) {
+                int m = bones[v] * 12;
+                for (int row = 0; row < 3; row++) {
+                    float p = out[m + row * 4] * skin[v * 3] + out[m + row * 4 + 1] * skin[v * 3 + 1]
+                            + out[m + row * 4 + 2] * skin[v * 3 + 2] + out[m + row * 4 + 3];
+                    assertEquals(mesh[v * 3 + row], p, 1e-5);
+                }
+            }
+            assertEquals("one run, on its first frame", 0, out[boneCount * 12], 0);
+
+            try {
+                r.frame(0, input, 1, 1, Renderer.JAVA_MODEL_SPACE, new float[1]);
+                fail("a short output must throw");
+            } catch (IllegalArgumentException expected) {
+                assertTrue(expected.getMessage().contains("out holds 1"));
+            }
+        }
+    }
 }

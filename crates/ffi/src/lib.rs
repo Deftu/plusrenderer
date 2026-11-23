@@ -13,6 +13,9 @@ mod jvm;
 pub struct Renderer {
     scene: Scene,
     error: String,
+    parts: Vec<([f32; 3], java::Part)>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    input: Vec<f32>,
 }
 
 #[no_mangle]
@@ -40,6 +43,8 @@ pub extern "C" fn renderer_new() -> *mut Renderer {
     Box::into_raw(Box::new(Renderer {
         scene: Scene::default(),
         error: String::new(),
+        parts: Vec::new(),
+        input: Vec::new(),
     }))
 }
 
@@ -372,6 +377,95 @@ pub unsafe extern "C" fn renderer_part_delta(
     0
 }
 
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn renderer_part_id(
+    r: *mut Renderer,
+    name_ptr: *const u8,
+    name_len: u32,
+) -> u32 {
+    let name = str_from(name_ptr, name_len).unwrap_or("");
+    (*r).scene.part_id(name) as u32
+}
+
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn renderer_query_id(
+    r: *mut Renderer,
+    name_ptr: *const u8,
+    name_len: u32,
+) -> u32 {
+    let name = str_from(name_ptr, name_len).unwrap_or("");
+    (*r).scene.query_id(name) as u32
+}
+
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn renderer_build_skin(r: *mut Renderer) -> i32 {
+    let r = &mut *r;
+    guarded(-1, || (r.scene.build_skin().glow.len() / 4) as i32)
+}
+
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn renderer_layout(r: *const Renderer) -> u32 {
+    (*r).scene.layout()
+}
+
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn renderer_skin_bone_count(r: *const Renderer) -> u32 {
+    (*r).scene.skin.bone_count
+}
+
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn renderer_skin_run_count(r: *const Renderer) -> u32 {
+    (*r).scene.skin.runs.len() as u32
+}
+
+#[allow(clippy::too_many_arguments, clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern "C" fn renderer_frame(
+    r: *mut Renderer,
+    seconds: f32,
+    parts: *const f32,
+    part_count: u32,
+    queries: *const f32,
+    query_count: u32,
+    space: u32,
+) -> i32 {
+    let r = &mut *r;
+    let parts = slice_from(parts, part_count as usize * 12);
+    let queries = slice_from(queries, query_count as usize);
+    let to_host = if space == 1 {
+        java::MODEL
+    } else {
+        Affine::IDENTITY
+    };
+
+    guarded(-1, || {
+        r.parts.clear();
+        r.parts.extend(parts.as_chunks::<12>().0.iter().map(|p| {
+            (
+                [p[0], p[1], p[2]],
+                java::Part {
+                    offset: [p[3], p[4], p[5]],
+                    rotation: [p[6], p[7], p[8]],
+                    scale: [p[9], p[10], p[11]],
+                },
+            )
+        }));
+        r.scene.set_game_parts(&r.parts);
+        for (id, &value) in queries.iter().enumerate() {
+            r.scene.set_query_at(id, value);
+        }
+        r.scene.pose(seconds);
+        r.scene.skin_frame(&to_host);
+        r.scene.skin.bone_count as i32
+    })
+}
+
 /// Builds the 3D mesh from the last pose in `space` (1 is `java::MODEL`). Quad count, or -1.
 /// # Safety
 /// `r` must come from `renderer_new`.
@@ -443,6 +537,14 @@ macro_rules! field_ptr {
             r.scene.$src.$field.as_ptr()
         }
     };
+    ($name:ident, $field:ident, $ty:ty) => {
+        #[allow(clippy::missing_safety_doc)]
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(r: *const Renderer) -> *const $ty {
+            let r = &*r;
+            r.scene.$field.as_ptr()
+        }
+    };
 }
 
 field_ptr!(renderer_positions, buffers.positions, f32);
@@ -459,6 +561,15 @@ field_ptr!(renderer_mesh_uvs, mesh.uvs, f32);
 field_ptr!(renderer_mesh_glow, mesh.glow, u8);
 // Four u32 per run: texture (the slot), first quad, quad count, cull.
 field_ptr!(renderer_mesh_runs, mesh.runs, MeshRun);
+
+field_ptr!(renderer_skin_positions, skin.positions, f32);
+field_ptr!(renderer_skin_normals, skin.normals, f32);
+field_ptr!(renderer_skin_uvs, skin.uvs, f32);
+field_ptr!(renderer_skin_glow, skin.glow, u8);
+field_ptr!(renderer_skin_bones, skin.bones, u32);
+field_ptr!(renderer_skin_runs, skin.runs, MeshRun);
+field_ptr!(renderer_skin_transforms, skin_transforms, f32);
+field_ptr!(renderer_skin_offsets, skin_offsets, f32);
 
 /// # Safety
 /// `r` must come from `renderer_new`.
@@ -481,6 +592,13 @@ unsafe fn str_from<'a>(ptr: *const u8, len: u32) -> Option<&'a str> {
         return None;
     }
     std::str::from_utf8(std::slice::from_raw_parts(ptr, len as usize)).ok()
+}
+
+unsafe fn slice_from<'a>(ptr: *const f32, len: usize) -> &'a [f32] {
+    if ptr.is_null() || len == 0 {
+        return &[];
+    }
+    std::slice::from_raw_parts(ptr, len)
 }
 
 /// Turns a core panic into `failed` so it can't take the host down, but wasm aborts regardless.
