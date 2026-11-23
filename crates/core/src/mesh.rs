@@ -74,6 +74,89 @@ impl Mesh {
     }
 }
 
+#[derive(Default)]
+pub struct Skin {
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub uvs: Vec<f32>,
+    pub glow: Vec<u8>,
+    pub bones: Vec<u32>,
+    pub bone_count: u32,
+    pub runs: Vec<MeshRun>,
+    run_instances: Vec<u32>,
+}
+
+impl Skin {
+    pub fn build(&mut self, instances: &[Instance]) {
+        self.positions.clear();
+        self.normals.clear();
+        self.uvs.clear();
+        self.glow.clear();
+        self.bones.clear();
+        self.runs.clear();
+        self.run_instances.clear();
+
+        let mut base = 0u32;
+        for (n, inst) in instances.iter().enumerate() {
+            let start = (self.glow.len() / 4) as u32;
+            let rest = Instance { frame: 0, ..*inst };
+
+            for (b, bone) in inst.model.bones.iter().enumerate() {
+                let glow = bone.glow.unwrap_or(0);
+                for cube in &bone.cubes {
+                    let tf = cube_transform(Affine::IDENTITY, cube);
+                    for face in Face::ALL {
+                        let Some(uv) = cube.faces[face.index()] else {
+                            continue;
+                        };
+                        let corners = cube.face_quad(face);
+                        let uvs = face_uvs(&rest, uv);
+                        let normal = normalize(tf.vector(face.normal()));
+
+                        for i in [1, 0, 3, 2] {
+                            self.positions.extend_from_slice(&tf.point(corners[i]));
+                            self.normals.extend_from_slice(&normal);
+                            self.uvs.extend_from_slice(&uvs[i]);
+                            self.glow.push(glow);
+                            self.bones.push(base + b as u32);
+                        }
+                    }
+                }
+            }
+            base += inst.model.bones.len() as u32;
+
+            let count = (self.glow.len() / 4) as u32 - start;
+            if count > 0 {
+                self.runs.push(MeshRun {
+                    texture: inst.texture,
+                    start,
+                    count,
+                    cull: inst.cull as u32,
+                });
+                self.run_instances.push(n as u32);
+            }
+        }
+        self.bone_count = base;
+    }
+
+    pub fn transforms(instances: &[Instance], to_host: &Affine, out: &mut Vec<f32>) {
+        out.clear();
+        for inst in instances {
+            for tf in inst.transforms {
+                out.extend_from_slice(&to_host.mul(tf).0);
+            }
+        }
+    }
+
+    pub fn frame_offsets(&self, instances: &[Instance], out: &mut Vec<f32>) {
+        out.clear();
+        for &i in &self.run_instances {
+            let inst = &instances[i as usize];
+            out.push(inst.frame as f32 / inst.frames.max(1) as f32);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

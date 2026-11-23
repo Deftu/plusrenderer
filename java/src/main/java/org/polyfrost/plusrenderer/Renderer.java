@@ -155,6 +155,54 @@ public final class Renderer implements AutoCloseable {
         return nMeshRuns(handle());
     }
 
+    public int partId(String name) {
+        return nPartId(handle(), name);
+    }
+
+    public int queryId(String name) {
+        return nQueryId(handle(), name);
+    }
+
+    public int buildSkin() {
+        return failed(nBuildSkin(handle()));
+    }
+
+    public int layout() {
+        return nLayout(handle());
+    }
+
+    public int skinBoneCount() {
+        return nSkinBoneCount(handle());
+    }
+
+    public float[] skinPositions() {
+        return nSkinPositions(handle());
+    }
+
+    public float[] skinNormals() {
+        return nSkinNormals(handle());
+    }
+
+    public float[] skinUvs() {
+        return nSkinUvs(handle());
+    }
+
+    public byte[] skinGlow() {
+        return nSkinGlow(handle());
+    }
+
+    public int[] skinBones() {
+        return nSkinBones(handle());
+    }
+
+    public int[] skinRuns() {
+        return nSkinRuns(handle());
+    }
+
+    public int frame(float seconds, float[] input, int partCount, int queryCount, int space, float[] out) {
+        return check(nFrame(handle(), seconds, input, partCount, queryCount, space, out));
+    }
+
     /** Poses at {@code seconds} and fills the 2D buffers, back to front. Returns the index count. */
     public int build(float yaw, float pitch, float distance, float targetY, float width, float height, float seconds) {
         return failed(nBuild(handle(), yaw, pitch, distance, targetY, width, height, seconds));
@@ -256,6 +304,18 @@ public final class Renderer implements AutoCloseable {
         return "linux-" + arch;
     }
 
+    private static native int nPartId(long r, String name);
+    private static native int nQueryId(long r, String name);
+    private static native int nBuildSkin(long r);
+    private static native int nLayout(long r);
+    private static native int nSkinBoneCount(long r);
+    private static native float[] nSkinPositions(long r);
+    private static native float[] nSkinNormals(long r);
+    private static native float[] nSkinUvs(long r);
+    private static native byte[] nSkinGlow(long r);
+    private static native int[] nSkinBones(long r);
+    private static native int[] nSkinRuns(long r);
+    private static native int nFrame(long r, float seconds, float[] input, int partCount, int queryCount, int space, float[] out);
     private static native long nCreate();
     private static native void nFree(long r);
     private static native String nError(long r);
